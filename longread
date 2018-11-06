@@ -1,0 +1,344 @@
+Друзья, добрый день.
+
+![image](https://habrastorage.org/webt/th/p7/q_/thp7q_ygl6m3-qnenu21phrpone.jpeg)
+
+Давеча удалось пообщаться с замечательными коллегами из компании Абвгде. Обсудили разное, в том числе градиентный бустинг. Я им рассказал аналогию про детство, санки и горку – когда скатываешься с горки, как раз делаешь градиентный спуск. Переворачиваем и получаем градиентный подъём. Это бустинг … не совсем. Мы как бы «смотрим по сторонам» на многомерную поверхность отсчетов и исследуем\спускаемся\поднимаемся эту поверхность строя решения для групп «точек» на поверхности. Опять не то. Недостаточно уметь запустить XGBoost, чтобы объяснить его. Плохо понял, плохо объяснил, не покатило … не осилил объяснить на пальцах, что такое градиентный бустинг, ибо гугнив и косноязычен  Пишу статью.
+
+**План атаки:**
+1.	Верхнеуровневое, интуитивное понимание бустинга, 
+2.	Реализуем РНН
+3.	Пример на XGBoost
+4.	Пример на LightGBM
+5.	Пример на CatBoost
+6.	Сравнение вариантов. Резюме.
+
+**Верхнеуровневое понимание бустинга**
+
+Читаем эту статью ["Открытого курса машинного обучения..."](https://habr.com/company/ods/blog/327250/). 
+
+Интуитивно, в двух словах - градиентный бустинг это такой быстрый, очень быстрый и мощный способ построения модели в машинном обучении. Автоматизировано делаем шаг 1) строим на части данных решение, потом на 2) другой части данных и на плохой части шага 1 строим другое решение … 3) ещё и 4) ещё … 5) перебираем … 6) выбираем лучшие решения и 7) складываем из них одно, как букет из разных цветов. Вечный конкурент нейросети. Как-то так.
+ 
+А при чём тут градиент? Используем градиент «качества» решения … подбираем решение от худшего к лучшему. На лучшем останавливаемся.
+ 
+Может применяться в задачках регрессии и классификации. Вечный конкурент нейросети. В общем полезная штука. Стоит иметь такую в хозяйстве.
+<cut />
+**РНН**
+
+Мы будем меряться моделями начиная с РНН: будем сравнивать скорость и качество РНН с XGBoost\ LightGBM\ CatBoost. Будем решать задачу регрессии - будем прогнозировать курс рубля к доллару. Оценивать будем метрикой RMSE (Root Mean Squared Error). Всё как я люблю.
+
+Данные о курсе рубля к доллару берём [отсюда ](https://www.finam.ru/profile/forex/rub-usd/export/) за период 1 января 1998 года по сейчас. До 1998 года данные брать не стал, ибо 1 января случилась деноминация. Получилось почти шесть тысяч отсчетов.
+ 
+Файл c данными 1dataset.csv можно найти на [ГитХабе тут](https://github.com/IlyaEgorov800/XGBoostFromDummy). И вообще – в [этой папке](https://github.com/IlyaEgorov800/XGBoostFromDummy) на ГитХабе будет сложено всё.
+
+Тренировать будем RNN LSTM написанную на keras с tensorflow. Keras встал быстро, командой
+```sudo pip install keras```
+
+Установка tensorflow повеселее … описана [здесь ](https://www.tensorflow.org/install/pip). Я устанавливал локально на Windows 10 в варианте на процессор.
+
+Так вот выглядит нейроночка:
+
+файл с нею поименован 2rnn.csv и взять его можно [тут ](https://github.com/IlyaEgorov800/XGBoostFromDummy)
+
+Модель училась час. Её код ниже.
+
+```python
+#РННка
+
+# Загружаем библиотеки
+import numpy as np
+import matplotlib.pyplot as plt
+import pandas as pd
+
+# Загружаем данные
+dataset = pd.read_csv('1dataset.csv')
+training_set = dataset.iloc[:, 4:5].values
+
+# Нормализуем
+from sklearn.preprocessing import MinMaxScaler
+sc = MinMaxScaler(feature_range = (0, 1))
+training_set_scaled = sc.fit_transform(training_set)
+
+# Разворачиваем данные для РННки
+X_train = []
+y_train = []
+for i in range(60, 5717): #Всего 5727 строк. Трейнинг - последние 10
+    X_train.append(training_set_scaled[i-60:i, 0])
+    y_train.append(training_set_scaled[i, 0])
+X_train, y_train = np.array(X_train), np.array(y_train)
+X_train = np.reshape(X_train, (X_train.shape[0], X_train.shape[1], 1))
+
+
+# Загружаем библиотеки Keras
+from keras.models import Sequential
+from keras.layers import Dense
+from keras.layers import LSTM
+from keras.layers import Dropout
+
+# Строим РННку
+regressor = Sequential()
+regressor.add(LSTM(units = 50, return_sequences = True, input_shape = (X_train.shape[1], 1)))
+regressor.add(Dropout(0.2))
+regressor.add(LSTM(units = 50, return_sequences = True))
+regressor.add(Dropout(0.2))
+regressor.add(LSTM(units = 50, return_sequences = True))
+regressor.add(Dropout(0.2))
+regressor.add(LSTM(units = 50))
+regressor.add(Dropout(0.2))
+regressor.add(Dense(units = 1))
+
+# Компилируем
+regressor.compile(optimizer = 'adam', loss = 'mean_squared_error')
+
+# Учим РННку
+regressor.fit(X_train, y_train, epochs = 75, batch_size = 24)
+
+
+# Выделяем тестовые данные из датасета - последние 10 отсчетов + 60 для разворачивания
+real_price = dataset.iloc[5717:5728, 4:5].values #10
+inputs = dataset.iloc[5657:5728, 4:5].values #10+60 #inputs = inputs.reshape(-1,1)
+inputs = sc.transform(inputs)
+X_test = []
+for i in range(61, 71):
+    X_test.append(inputs[i-60:i, 0])
+X_test = np.array(X_test)
+X_test = np.reshape(X_test, (X_test.shape[0], X_test.shape[1], 1))
+
+predicted_price = regressor.predict(X_test)
+predicted_price = sc.inverse_transform(predicted_price)
+
+# Сохраняем в эксельку ... потом повертим в Экселе или в Tableau или ещё где
+df_real_price = pd.DataFrame(inputs)
+df_real_price.to_excel("21real.xlsx")
+df_predicted_price = pd.DataFrame(predicted_price)
+df_predicted_price.to_excel("22prediction.xlsx")
+
+# Нарисуем график
+plt.plot(real_price, color = 'red', label = 'Real Price')
+plt.plot(predicted_price, color = 'blue', label = 'Predicted Price')
+plt.title('RNN Prediction')
+plt.xlabel('Time')
+plt.ylabel('Real Price')
+plt.legend()
+plt.show()
+
+# Оценим качество прогноза через RMSE (Root Mean Squared Error)
+import math
+from sklearn.metrics import mean_squared_error
+rmse = math.sqrt(mean_squared_error(real_price, predicted_price))
+```
+
+Такой вот показала результат:
+Файл с фактом для прогноза 21real.xlsx. Прогноз 21prediction.xlsx. Лежит в той же [папке](https://github.com/IlyaEgorov800/XGBoostFromDummy).
+RMSE = 0.65.
+Похоже, что нейронка переучилась.
+
+**Пример на XGBoost**
+
+В моём окружении: это Windows 10 x64, язык Python 3 в редакторе Spyder в Anaconda 5, проводное подключение к сети – XGBoost встал пулей. Командой введённой в командную строку Анаконды:
+```python
+pip install xgboost
+```
+XGBoost использовался со всеми параметрами по дефолту. 
+
+```python
+# XGBoost
+
+# Загружаем библиотеки
+import numpy as np
+import matplotlib.pyplot as plt
+import pandas as pd
+
+# Загружаем данные
+dataset = pd.read_csv('1dataset.csv')
+training_set_scaled = dataset.iloc[:, 4:5].values
+
+# Разворачиваем данные
+X_train = []
+y_train = []
+for i in range(60, 5717): #Всего 5727 строк. Трейнинг - последние 10
+    X_train.append(training_set_scaled[i-60:i, 0])
+    y_train.append(training_set_scaled[i, 0])
+X_train, y_train = np.array(X_train), np.array(y_train)
+
+# Запускаем Берлагу (c) Ильф и Петров
+from xgboost import XGBRegressor
+regressor = XGBRegressor()
+regressor.fit(X_train, y_train)
+
+# Готовимся прогнозировать прогнозы
+real_price = dataset.iloc[5717:5728, 4:5].values #10
+inputs = dataset.iloc[5657:5728, 4:5].values #10+60 #inputs = inputs.reshape(-1,1)
+X_test = []
+for i in range(61, 71):
+    X_test.append(inputs[i-60:i, 0])
+X_test = np.array(X_test)
+
+# Прогнозируем прогноз!
+predicted_price = regressor.predict(X_test)
+
+# Сохраняем в эксельку ... потом повертим в Экселе или в Tableau или ещё где
+df_real_price = pd.DataFrame(inputs)
+df_real_price.to_excel("31real.xlsx")
+df_predicted_price = pd.DataFrame(predicted_price)
+df_predicted_price.to_excel("32prediction.xlsx")
+
+# Нарисуем график
+plt.plot(real_price, color = 'red', label = 'Real Price')
+plt.plot(predicted_price, color = 'blue', label = 'Predicted Price')
+plt.title('XGBoost Prediction')
+plt.xlabel('Time')
+plt.ylabel('Real Price')
+plt.legend()
+plt.show()
+
+# Оценим качество прогноза через RMSE (Root Mean Squared Error)
+import math
+from sklearn.metrics import mean_squared_error
+rmse = math.sqrt(mean_squared_error(real_price, predicted_price))
+```
+
+Файл кода 3XGBoost.py
+Модель выучилась «сразу». По времени заняло несколько секунд. Пусть 2 секунды.
+Файл с фактом для прогноза 31real.xlsx. Прогноз 31prediction.xlsx.
+![image](https://habrastorage.org/webt/6j/g3/ze/6jg3zea_htoleyml161-mzdg55q.png)
+RMSE = 0.32.
+Вы обратили внимание на небольшую длинну пункта про XGBoost? Удивительно: всё стало быстро, заработало мгновенно, результат выдало качественный. 
+
+**Пример на LightGBM**
+
+В моём окружении LightGBM встал пулей. Повторяюсь? Командой введённой в командную строку Анаконды:
+```python
+pip install lightgbm
+```
+LightGBM сначала использовался со параметрами по дефолту. Взял исходники [отсюда ](https://github.com/Microsoft/LightGBM). Потом немного покачал параметры.
+
+```python
+# LightGBM
+
+# Загружаем библиотеки
+import numpy as np
+import matplotlib.pyplot as plt
+import pandas as pd
+
+# Загружаем данные
+dataset = pd.read_csv('1dataset.csv')
+training_set_scaled = dataset.iloc[:, 4:5].values
+
+# Разворачиваем данные
+X_train = []
+y_train = []
+for i in range(60, 5717): #Всего 5727 строк. Трейнинг - последние 10
+    X_train.append(training_set_scaled[i-60:i, 0])
+    y_train.append(training_set_scaled[i, 0])
+X_train, y_train = np.array(X_train), np.array(y_train)
+
+# И сразу готовимся прогнозировать прогнозы
+real_price = dataset.iloc[5717:5728, 4:5].values #10
+inputs = dataset.iloc[5657:5728, 4:5].values #10+60 #inputs = inputs.reshape(-1,1)
+X_test = []
+y_test = []
+for i in range(61, 71):
+    X_test.append(inputs[i-60:i, 0])
+    y_test.append(training_set_scaled[i, 0])
+X_test, y_test = np.array(X_test), np.array(y_test)
+
+
+# Запускаем Берлагу (c) Ильф и Петров
+import lightgbm as lgb
+
+# Специальным образом создаём датасеты для lightgbm
+lgb_train = lgb.Dataset(X_train, y_train)
+lgb_eval = lgb.Dataset(X_test, y_test, reference=lgb_train)
+
+# Задаём параметры в виде словаря
+params = {
+    'boosting_type': 'gbdt',
+    'objective': 'regression',
+    'metric': {'l2', 'l1'},
+    'num_leaves': 131,
+    'learning_rate': 1.2,
+    'feature_fraction': 0.9,
+    'bagging_fraction': 0.8,
+    'bagging_freq': 5,
+    'verbose': 0
+}
+
+# тренируем-с
+gbm = lgb.train(params,
+                lgb_train,
+                num_boost_round=100,
+                valid_sets=lgb_eval,
+                early_stopping_rounds=5)
+
+
+# Прогнозируем прогноз!
+predicted_price = gbm.predict(X_test, num_iteration=gbm.best_iteration)
+
+# Сохраняем в эксельку ... потом повертим в Экселе или в Tableau или ещё где
+df_real_price = pd.DataFrame(inputs)
+df_real_price.to_excel("41real.xlsx")
+df_predicted_price = pd.DataFrame(predicted_price)
+df_predicted_price.to_excel("42prediction.xlsx")
+
+# Нарисуем график
+plt.plot(real_price, color = 'red', label = 'Real Price')
+plt.plot(predicted_price, color = 'blue', label = 'Predicted Price')
+plt.title('LightGBM Prediction')
+plt.xlabel('Time')
+plt.ylabel('Real Price')
+plt.legend()
+plt.show()
+
+# Оценим качество прогноза через RMSE (Root Mean Squared Error)
+import math
+from sklearn.metrics import mean_squared_error
+rmse = math.sqrt(mean_squared_error(real_price, predicted_price))
+```
+
+Файл кода получился 4lightgbm.py
+Модель выучилась быстро. По времени заняло несколько секунд. Пусть 2 секунды.
+Файл с фактом для прогноза 41real.xlsx. Прогноз 42prediction.xlsx.
+![image](https://habrastorage.org/webt/fd/b1/ek/fdb1ekvgl-pea6bykddvoa637p8.png)
+RMSE = 1.14.
+Похуже выходит. Если использовать дефолтный темплейт Майкрософта, то вообще ерунда получается с RMSE = 30. Сделал десяток итераций настройки параметров, кое-какие улучшения получил. Полноценный параметрический тюнинг буду делать как-нибудь потом.
+
+**Пример на CatBoost**
+
+В моём окружении CatBoost встал пулей. Ну вот опять повторяюсь. Командой введённой в командную строку Анаконды:
+```python
+pip install catboost
+```
+Сначала CatBoost использовался с параметрами по [дефолту](https://github.com/catboost). 
+По дефолту модель выучилась сразу и выдала полную фигню … зато быстро. На параметрах iterations=50, depth=10 обучение заняло минуту, прогноз стал значительно лучше.
+![image](https://habrastorage.org/webt/ci/q6/1c/ciq61c3g-dnpipwo3dpjg4eztbq.png)
+Файл кода 5CatBoost.py.
+Файл с фактом для прогноза 51real.xlsx. Прогноз 52prediction.xlsx
+RMSE = 0.45.
+
+**Вместо заключения**
+
+Цель упражнения выше была – разобраться, что такое градиентный бустинг и по-быстрому наделать модели, аналогичные мощной модели на RNN-LSTM. Разобрались. Наделали.
+
+Собрал в табличку результаты исследования. Получилось:
+Инструмент	Скорость	Качество	Доступность
+RNN          	2	3	3
+XGBoost	        5	5	5
+LightGBM	        4	2*	3
+CatBoost	        4	4	4
+
+RNN – как говорил Кларксон в ТопГир: «Моооооощь!». Если есть много вычислительной мощности, очень много, то RNN обещает удивительные результаты. В моём случае результаты так себе. Да и код пишется не то, чтобы очень просто. На слабой машине и гиперпараметры подбираться будут неделю. Мои дальнейшие шаги – посмотреть autokeras, надо только найти «Моооооощь».
+
+XGBoost – хочу всё и сразу. Так и получилось. Работает мгновенно. Программируется просто. Куча примеров в сети. Качественное качество выдаёт. На сейчас – мой выбор. Мои дальнейшие шаги – создать или скачать AutoML решение в загашник на этом движке. 
+
+LightGBM – ожидал чуда от супермегакорпорации. Чудо получил, а вот по-быстрому запустить не смог  То есть смог конечно, только RMSE = 30. Почитал интернет – говорят это как раз убийца XGBoost и во многих случаях лучший выбор. У меня не взлетело. Мои дальнейшие шаги – разобраться как конкретно оно летает, запилить или скачать AutoML решение в загашник на этом движке.
+
+CatBoost – турбо котик из Яндекса. Респект и уважуха … и вообще. Летит успешно, тюнится просто. Немного медленнее остальных в моей реализации, но это скорее всего недостаток в настройке. Интернет часто говорит, что самый быстрый инструмент. Мои дальнейшие шаги – поработать над скоростью и опять же создать или скачать AutoML решение в загашник на этом движке.
+
+Резюме:
+Теперь смогу рассказать кому угодно историю про бустинга градиентного. Где он водится и с чем его едят.
+Срочные решения буду делать на XGBoost. И, если XGBoost находит в данных фичи, то дальше стоит копать в глубь.
+
+**P.S.**
+А ещё можно почитать статью [catboost-vs-light-gbm-vs-xgboost](https://towardsdatascience.com/catboost-vs-light-gbm-vs-xgboost-5f93620723db)
+
+Друзья, Вы большие молодцы ибо дочитали до конца. Поклон в пол.
